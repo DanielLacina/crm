@@ -5,6 +5,7 @@ use crate::components::ui_components::{
     component::{Event, UIComponent},
     events::Message,
     tables::events::CreateTableFormMessage,
+    tables::foreign_key_dropdown::{ForeignKeyDropDownUI, ForeignKeyDropdownEvents},
 };
 use iced::{
     alignment,
@@ -17,14 +18,33 @@ use iced::{
     Background, Border, Color, Element, Length, Shadow, Task, Theme, Vector,
 };
 use std::iter::zip;
+use std::sync::Arc;
+
+pub struct CreateTableFormForeignKeyDropdown;
+
+impl ForeignKeyDropdownEvents for CreateTableFormForeignKeyDropdown {
+    fn add_foreign_key(
+        index: usize,
+        referenced_table_name: String,
+        referenced_column_name: String,
+    ) -> Message {
+        CreateTableFormMessage::AddForeignKey(index, referenced_table_name, referenced_column_name)
+            .message()
+    }
+    fn remove_foreign_key(index: usize) -> Message {
+        CreateTableFormMessage::RemoveForeignKey(index).message()
+    }
+    fn toggle_foreign_key_table(index: usize, table_name: String) -> Message {
+        CreateTableFormMessage::ToggleForeignKeyTable(index, table_name).message()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CreateTableFormUI {
     create_table_input: BTableIn,
     pub tables_general_info: Option<Vec<BTableGeneralInfo>>,
-    active_foreign_key_table_within_dropdown: Option<String>, // table in foreign key dropdown that has its columns displayed
-    active_foreign_key_dropdown_column: Option<usize>, // column index that wants the foreign key dropdown
-                                                       // activated
+    active_foreign_key_dropdown: Option<ForeignKeyDropDownUI>, // column index that wants the foreign key dropdown
+                                                               // activated
 }
 
 impl UIComponent for CreateTableFormUI {
@@ -95,8 +115,7 @@ impl UIComponent for CreateTableFormUI {
                     }
                 }
 
-                self.active_foreign_key_dropdown_column = None;
-                self.active_foreign_key_table_within_dropdown = None;
+                self.active_foreign_key_dropdown = None;
                 Task::none()
             }
             Self::EventType::RemoveForeignKey(index) => {
@@ -110,8 +129,7 @@ impl UIComponent for CreateTableFormUI {
                         column.constraints.remove(existing_index);
                     }
                 }
-                self.active_foreign_key_dropdown_column = None;
-                self.active_foreign_key_table_within_dropdown = None;
+                self.active_foreign_key_dropdown = None;
 
                 Task::none()
             }
@@ -138,19 +156,21 @@ impl UIComponent for CreateTableFormUI {
             }
             Self::EventType::ToggleForeignKeyDropdown(index) => {
                 // Toggle the dropdown for the specified column
-                if self.active_foreign_key_dropdown_column == Some(index) {
-                    self.active_foreign_key_dropdown_column = None;
-                } else {
-                    self.active_foreign_key_dropdown_column = Some(index);
+                if let Some(column) = self.create_table_input.columns.get(index) {
+                    self.active_foreign_key_dropdown = Some(ForeignKeyDropDownUI::new(
+                        column.clone(),
+                        self.tables_general_info.clone(),
+                        Arc::new(CreateTableFormForeignKeyDropdown),
+                        None,
+                        index,
+                    ));
                 }
                 Task::none()
             }
             Self::EventType::ToggleForeignKeyTable(_, table_name) => {
-                // Toggle the column list for the specified table
-                if self.active_foreign_key_table_within_dropdown == Some(table_name.clone()) {
-                    self.active_foreign_key_table_within_dropdown = None;
-                } else {
-                    self.active_foreign_key_table_within_dropdown = Some(table_name);
+                if let Some(foreign_key_dropdown) = &mut self.active_foreign_key_dropdown {
+                    foreign_key_dropdown.active_foreign_key_table_within_dropdown =
+                        Some(table_name);
                 }
                 Task::none()
             }
@@ -163,8 +183,7 @@ impl CreateTableFormUI {
         Self {
             create_table_input: BTableIn::default(),
             tables_general_info,
-            active_foreign_key_dropdown_column: None,
-            active_foreign_key_table_within_dropdown: None,
+            active_foreign_key_dropdown: None,
         }
     }
 
@@ -274,7 +293,7 @@ impl CreateTableFormUI {
         });
 
         // Foreign key dropdown
-        let foreign_key_dropdown = self.render_foreign_key_button(index);
+        let foreign_key_dropdown = self.render_foreign_key_button(index, &column);
         let remove_button = button("Remove")
             .style(|_, _| delete_button_style())
             .on_press(<CreateTableFormUI as UIComponent>::EventType::message(
@@ -294,30 +313,31 @@ impl CreateTableFormUI {
         .align_y(Vertical::Center)
         .into()
     }
-    fn render_foreign_key_button<'a>(&'a self, index: usize) -> Element<'a, Message> {
+    fn render_foreign_key_button<'a>(
+        &'a self,
+        index: usize,
+        column: &BColumn,
+    ) -> Element<'a, Message> {
         // Button to show the foreign key tables
-        let button_text = if let Some(column_info) = self.create_table_input.columns.get(index) {
-            if let Some(foreign_key_constraint) = column_info
-                .constraints
-                .iter()
-                .find(|constraint| matches!(constraint, BConstraint::ForeignKey(_, _)))
+        let button_text = if let Some(foreign_key_constraint) = column
+            .constraints
+            .iter()
+            .find(|constraint| matches!(constraint, BConstraint::ForeignKey(_, _)))
+        {
+            if let BConstraint::ForeignKey(referenced_table_name, referenced_column_name) =
+                foreign_key_constraint
             {
-                if let BConstraint::ForeignKey(referenced_table_name, referenced_column_name) =
-                    foreign_key_constraint
-                {
-                    text(format!(
-                        "{}.{}",
-                        referenced_table_name, referenced_column_name
-                    ))
-                } else {
-                    text("Set Foreign Key")
-                }
+                text(format!(
+                    "{}.{}",
+                    referenced_table_name, referenced_column_name
+                ))
             } else {
                 text("Set Foreign Key")
             }
         } else {
             text("Set Foreign Key")
         };
+
         let button = button(button_text).style(|_, _| button_style()).on_press(
             <CreateTableFormUI as UIComponent>::EventType::message(
                 <CreateTableFormUI as UIComponent>::EventType::ToggleForeignKeyDropdown(index),
@@ -325,100 +345,19 @@ impl CreateTableFormUI {
         );
 
         // Check if the current column's foreign key dropdown is active
-        if self.active_foreign_key_dropdown_column == Some(index) {
-            // Render the foreign key dropdown
-            let foreign_key_dropdown = self.render_foreign_key_dropdown(index);
-            Column::new()
-                .push(button)
-                .push(foreign_key_dropdown)
-                .spacing(5)
-                .into()
-        } else {
-            // Render just the button
-            button.into()
-        }
-    }
-    fn render_foreign_key_dropdown<'a>(&'a self, index: usize) -> Element<'a, Message> {
-        if let Some(tables) = &self.tables_general_info {
-            // Initialize a column for the dropdown
-            let mut dropdown = Column::new().spacing(10).padding(10);
-            let remove_foreign_key_button = button(text("Remove"))
-                .style(|_, _| delete_button_style())
-                .on_press(<CreateTableFormUI as UIComponent>::EventType::message(
-                    <CreateTableFormUI as UIComponent>::EventType::RemoveForeignKey(index),
-                ));
-            dropdown = dropdown.push(remove_foreign_key_button);
-
-            for table in tables {
-                let table_name = table.table_name.clone();
-
-                // Create a button for the table name
-                let table_button = button(text(table_name.clone()))
-                    .style(|_, _| table_button_style())
-                    .on_press(<CreateTableFormUI as UIComponent>::EventType::message(
-                        <CreateTableFormUI as UIComponent>::EventType::ToggleForeignKeyTable(
-                            index,
-                            table_name.clone(),
-                        ),
-                    ));
-
-                // Check if this table is expanded
-                let expanded_table = if matches!(self.active_foreign_key_table_within_dropdown, Some(ref name) if name == &table_name)
-                {
-                    // Create a PickList for the columns in the table
-                    let selected: Option<String> = None;
-                    let column_names_to_reference_by_datatype: Vec<String> =
-                        zip(table.column_names.clone(), table.data_types.clone())
-                            .filter(|(column_name, data_type)| {
-                                *data_type.to_lowercase()
-                                    == self.create_table_input.columns[index]
-                                        .datatype
-                                        .to_string()
-                                        .to_lowercase()
-                            })
-                            .map(|(column_name, data_type)| column_name)
-                            .collect();
-                    let column_picklist = PickList::new(
-                        column_names_to_reference_by_datatype,
-                        selected,
-                        move |column_name| {
-                            <CreateTableFormUI as UIComponent>::EventType::message(
-                                <CreateTableFormUI as UIComponent>::EventType::AddForeignKey(
-                                    index,
-                                    table_name.clone(),
-                                    column_name,
-                                ),
-                            )
-                        },
-                    )
-                    .width(150);
-
-                    // Combine table button and column picklist in a column
-                    Column::new()
-                        .push(table_button)
-                        .push(column_picklist)
-                        .spacing(5)
-                } else {
-                    // Only show the table button if not expanded
-                    Column::new().push(table_button)
-                };
-
-                // Add the expanded or non-expanded table to the dropdown
-                dropdown = dropdown.push(expanded_table);
+        if let Some(active_foreign_key_dropdown) = &self.active_foreign_key_dropdown {
+            if active_foreign_key_dropdown.index == index {
+                Column::new()
+                    .push(button)
+                    .push(active_foreign_key_dropdown.content())
+                    .spacing(5)
+                    .into()
+            } else {
+                // Render just the button
+                button.into()
             }
-
-            // Wrap the dropdown in a scrollable container
-            scrollable(container(dropdown.padding(10)).style(|_| dropdown_style()))
-                .height(Length::Shrink)
-                .width(150)
-                .into()
         } else {
-            // If no tables are available, show a placeholder
-            container(text("No tables available"))
-                .height(Length::Shrink)
-                .width(Length::FillPortion(2))
-                .style(|_| dropdown_style())
-                .into()
+            button.into()
         }
     }
 }

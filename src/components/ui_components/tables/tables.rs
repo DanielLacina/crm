@@ -92,9 +92,7 @@ impl UIComponent for TablesUI {
                         tables.set_table_info(table_name).await;
                         tables.table_info.unwrap()
                     },
-                    |table_info| {
-                        Self::EventType::message(Self::EventType::SetSingleTableInfo(table_info))
-                    },
+                    |table_info| Self::EventType::SetSingleTableInfo(table_info).message(),
                 )
             }
             Self::EventType::SetSingleTableInfo(table_info) => {
@@ -138,9 +136,7 @@ impl UIComponent for TablesUI {
                         tables.set_general_tables_info().await;
                         tables
                     },
-                    |tables| {
-                        Self::EventType::message(Self::EventType::ComponentInitialized(tables))
-                    },
+                    |tables| Self::EventType::ComponentInitialized(tables).message(),
                 )
             }
             Self::EventType::ComponentInitialized(tables) => {
@@ -166,7 +162,7 @@ impl UIComponent for TablesUI {
 
                             tables
                         },
-                        |tables| Self::EventType::message(Self::EventType::SetTables(tables)),
+                        |tables| Self::EventType::SetTables(tables).message(),
                     )
                 } else {
                     Task::none()
@@ -185,7 +181,7 @@ impl UIComponent for TablesUI {
 
                         tables
                     },
-                    |tables| Self::EventType::message(Self::EventType::SetTables(tables)),
+                    |tables| Self::EventType::SetTables(tables).message(),
                 )
             }
             Self::EventType::SetTables(tables) => {
